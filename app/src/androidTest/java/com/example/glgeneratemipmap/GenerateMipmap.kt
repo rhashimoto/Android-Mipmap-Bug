@@ -1,43 +1,60 @@
 package com.example.glgeneratemipmap
 
+import android.opengl.EGL14.*
+import android.opengl.EGLConfig
 import android.opengl.GLES20.*
-import android.opengl.GLSurfaceView
-import android.os.Bundle
 import android.renderscript.Matrix4f
 import android.util.Log
-import androidx.appcompat.app.AppCompatActivity
-import kotlinx.android.synthetic.main.activity_main.*
+import com.google.common.truth.Truth.assertThat
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
 import java.nio.ByteBuffer
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
 
-class MainActivity : AppCompatActivity() {
+class GenerateMipmapTest {
 
-  override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    setContentView(R.layout.activity_main)
+  @Before
+  fun setup() {
+    val eglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY)
+    val version = IntArray(2)
+    eglInitialize(eglDisplay, version, 0, version, 1)
 
-    surfaceView.setEGLContextClientVersion(2)
-    surfaceView.setRenderer(Renderer())
-    surfaceView.preserveEGLContextOnPause = true
+    val configAttribs = intArrayOf(
+      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+      EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER,
+      EGL_RED_SIZE, 8,
+      EGL_GREEN_SIZE, 8,
+      EGL_BLUE_SIZE, 8,
+      EGL_ALPHA_SIZE, 8,
+      EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+      EGL_NONE)
+    val configs = arrayOfNulls<EGLConfig>(1)
+    val numConfig = IntArray(1)
+    eglChooseConfig(eglDisplay, configAttribs, 0, configs, 0, configs.size, numConfig, 0)
+    check(numConfig[0] > 0)
+
+    val surfaceAttribs = intArrayOf(
+      EGL_WIDTH, 1,
+      EGL_HEIGHT, 1,
+      EGL_NONE)
+    val eglSurface = eglCreatePbufferSurface(eglDisplay, configs[0], surfaceAttribs, 0)
+
+    val contextAttribs = intArrayOf(
+      EGL_CONTEXT_CLIENT_VERSION, 2,
+      EGL_NONE)
+    val eglContext = eglCreateContext(eglDisplay, configs[0], EGL_NO_CONTEXT, contextAttribs, 0)
+    eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
   }
-}
 
-class Renderer : GLSurfaceView.Renderer {
-
-  private var bufferName = 0
-  private var shaderProgram = 0
-  private var oesProgram = 0
-
-  private var textureName = 0
-  private var framebufferName = 0
-
-  override fun onSurfaceCreated(p0: GL10?, p1: EGLConfig?) {
+  @Test
+  fun testGenerateMipmapWithExternalTextureOES() {
+    val TEXTURE_WIDTH = 256
+    val TEXTURE_HEIGHT = 256
     val name = intArrayOf(0)
 
     // Create a unit square vertex buffer.
     glGenBuffers(1, name, 0)
-    bufferName = name[0]
+    val bufferName = name[0]
     glBindBuffer(GL_ARRAY_BUFFER, bufferName)
     val buffer = byteArrayOf(
       0, 0,
@@ -49,7 +66,6 @@ class Renderer : GLSurfaceView.Renderer {
         .position(0)
     }
     glBufferData(GL_ARRAY_BUFFER, buffer.capacity(), buffer, GL_STATIC_DRAW)
-    checkGL()
 
     // Create a simple texturing shader.
     val vertexShader = glCreateShader(GL_VERTEX_SHADER)
@@ -74,7 +90,7 @@ class Renderer : GLSurfaceView.Renderer {
     """)
     glCompileShader(fragmentShader)
 
-    shaderProgram = glCreateProgram()
+    val shaderProgram = glCreateProgram()
     glAttachShader(shaderProgram, vertexShader)
     glAttachShader(shaderProgram, fragmentShader)
     glBindAttribLocation(shaderProgram, 0, "vertex")
@@ -93,7 +109,7 @@ class Renderer : GLSurfaceView.Renderer {
     """)
     glCompileShader(oesShader)
 
-    oesProgram = glCreateProgram()
+    val oesProgram = glCreateProgram()
     glAttachShader(oesProgram, vertexShader)
     glAttachShader(oesProgram, oesShader)
     glBindAttribLocation(oesProgram, 0, "vertex")
@@ -103,12 +119,12 @@ class Renderer : GLSurfaceView.Renderer {
     val status = intArrayOf(GL_FALSE)
     glGetProgramiv(oesProgram, GL_VALIDATE_STATUS, status, 0)
     if (status[0] != GL_TRUE) {
-        Log.d("MainActivity", "validation: ${glGetProgramInfoLog(oesProgram)}")
+      Log.d("MainActivity", "validation: ${glGetProgramInfoLog(oesProgram)}")
     }
 
-    // Create the texture.
+    // Create the texture we will render to.
     glGenTextures(1, name, 0)
-    textureName = name[0]
+    val textureName = name[0]
     glActiveTexture(GL_TEXTURE0)
     glBindTexture(GL_TEXTURE_2D, textureName)
     glTexImage2D(
@@ -119,50 +135,37 @@ class Renderer : GLSurfaceView.Renderer {
       GL_RGBA, GL_UNSIGNED_BYTE,
       null)
 
-    // Create a framebuffer that draws to the texture.
+    // Create a framebuffer that renders to the texture.
     glGenFramebuffers(1, name, 0)
-    framebufferName = name[0]
+    val framebufferName = name[0]
     glBindFramebuffer(GL_FRAMEBUFFER, framebufferName)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureName, 0)
-    checkGL()
-  }
 
-  override fun onSurfaceChanged(p0: GL10?, width: Int, height: Int) {
-    glViewport(0, 0, width, height)
-  }
+    // All objects are created.
+    assertThat(glGetError()).isEqualTo(GL_NO_ERROR)
 
-  override fun onDrawFrame(p0: GL10?) {
     // Render to texture via the framebuffer.
     // Just use clear to avoid having to define another shader.
     val screenViewport = IntArray(4)
     glGetIntegerv(GL_VIEWPORT, screenViewport, 0)
     glBindFramebuffer(GL_FRAMEBUFFER, framebufferName)
+    glViewport(0, 0, TEXTURE_WIDTH, TEXTURE_HEIGHT)
     check(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
 
-    glViewport(0, 0, TEXTURE_WIDTH, TEXTURE_HEIGHT)
-
+    // Fill the texture with green.
     glClearColor(0f, 1f, 0f, 1f)
     glClear(GL_COLOR_BUFFER_BIT)
-    glEnable(GL_SCISSOR_TEST)
-    glScissor(0, TEXTURE_HEIGHT / 3, TEXTURE_WIDTH, TEXTURE_HEIGHT / 3)
-    glClearColor(0f, 0f, 1f, 1f)
-    glClear(GL_COLOR_BUFFER_BIT)
-    glDisable(GL_SCISSOR_TEST)
-    checkGL()
 
     // This is the line that triggers the bug on the emulator, even though we
     // undo it with the very next line.
     glUseProgram(oesProgram)
     glUseProgram(0)
-    checkGL()
 
     // Generate the mipmap. This where the emulator fails. Note that some platforms
     // (Linux) will record GL_INVALID_OPERATION and others (Mac) will not record an error.
     glActiveTexture(GL_TEXTURE0)
     glBindTexture(GL_TEXTURE_2D, textureName)
-    checkGL()
     glGenerateMipmap(GL_TEXTURE_2D)
-    checkGL()
 
     // Draw the texture we just rendered to the screen.
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -173,54 +176,39 @@ class Renderer : GLSurfaceView.Renderer {
     glEnableVertexAttribArray(0)
     glVertexAttribPointer(0, 2, GL_UNSIGNED_BYTE, false, 0, 0)
 
-    // Draw to the top half of the screen without mipmaps enabled.
-    glUniformMatrix4fv(
-      glGetUniformLocation(shaderProgram, "transform"),
-      1, false,
-      Matrix4f().apply {
-        translate(-1f, 0f, 0f)
-        scale(2f, 1f, 1f)
-      }.array, 0)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
-
-    // Draw to the bottom half of the screen with mipmaps enabled. On
-    // the emulator, this draws black and it appears that the texture
-    // is not complete.
     glUniformMatrix4fv(
       glGetUniformLocation(shaderProgram, "transform"),
       1, false,
       Matrix4f().apply {
         translate(-1f, -1f, 0f)
-        scale(2f, 1f, 1f)
+        scale(2f, 2f, 1f)
       }.array, 0)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 
-    checkGL()
+    // Read a pixel.
+    val pixels = ByteBuffer.allocateDirect(4)
+    glReadPixels(
+      0, 0,
+      1, 1,
+      GL_RGBA, GL_UNSIGNED_BYTE,
+      pixels)
+
+    // The pixel should be green. It will be black if glGenerateMipmap()
+    // failed (because the texture is not complete).
+    val color = pixels.asIntBuffer().get(0)
+    assertThat(color).isEqualTo(0x00ff00ff)
   }
 
-  companion object {
-    private const val TEXTURE_WIDTH = 256
-    private const val TEXTURE_HEIGHT = 256
-  }
-}
-
-fun convertGLErrorToString(error: Int): String {
-    return when (error) {
-        GL_NO_ERROR -> "GL_NO_ERROR"
-        GL_INVALID_ENUM -> "GL_INVALID_ENUM"
-        GL_INVALID_FRAMEBUFFER_OPERATION -> "GL_INVALID_FRAMEBUFFER_OPERATION"
-        GL_INVALID_VALUE -> "GL_INVALID_VALUE"
-        GL_INVALID_OPERATION -> "GL_INVALID_OPERATION"
-        GL_OUT_OF_MEMORY -> "GL_OUT_OF_MEMORY"
-        else -> "Unknown GL error $error"
-    }
-}
-
-fun checkGL() {
-  val error = glGetError()
-  if (error != GL_NO_ERROR) {
-    Log.e("MainActivity", "", RuntimeException(convertGLErrorToString(error)))
+  @After
+  fun teardown() {
+    val surface = eglGetCurrentSurface(EGL_DRAW)
+    val context = eglGetCurrentContext()
+    val display = eglGetCurrentDisplay()
+    eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)
+    eglDestroySurface(display, surface)
+    eglDestroyContext(display, context)
+    eglReleaseThread()
+    eglTerminate(display)
   }
 }
