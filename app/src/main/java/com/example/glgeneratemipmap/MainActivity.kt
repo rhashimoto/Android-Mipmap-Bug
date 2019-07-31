@@ -27,6 +27,7 @@ class Renderer : GLSurfaceView.Renderer {
 
   private var bufferName = 0
   private var shaderProgram = 0
+  private var oesProgram = 0
 
   private var textureName = 0
   private var framebufferName = 0
@@ -81,6 +82,26 @@ class Renderer : GLSurfaceView.Renderer {
     glBindAttribLocation(shaderProgram, 0, "vertex")
     glLinkProgram(shaderProgram)
 
+    // Create a program that uses samplerExternalOES.
+    val oesShader = glCreateShader(GL_FRAGMENT_SHADER)
+    glShaderSource(oesShader, """
+      #extension GL_OES_EGL_image_external : require
+      precision mediump float;
+      uniform samplerExternalOES colorTexture;
+      varying vec2 coord;
+      void main() {
+        gl_FragColor = texture2D(colorTexture, coord, 6.);
+      }
+    """)
+    glCompileShader(oesShader)
+    Log.d("", "oes shader: ${glGetShaderInfoLog(oesShader)}")
+
+    oesProgram = glCreateProgram()
+    glAttachShader(oesProgram, vertexShader)
+    glAttachShader(oesProgram, oesShader)
+    glBindAttribLocation(oesProgram, 0, "vertex")
+    glLinkProgram(oesProgram)
+    
     // Create the texture.
     glGenTextures(1, name, 0)
     textureName = name[0]
@@ -124,12 +145,19 @@ class Renderer : GLSurfaceView.Renderer {
     glClear(GL_COLOR_BUFFER_BIT)
     glDisable(GL_SCISSOR_TEST)
 
+    // This is where the bug happens! We bind this shader program, and even though
+    // it is immediately unbound and never used for drawing, subsequently generating
+    // a mipmap fails. If we instead bind a shader program that does *not* use
+    // samplerExternalOES the bug does not appear.
+    glUseProgram(oesProgram)
+    glUseProgram(0)
+
     // Generate the mipmap.
     glActiveTexture(GL_TEXTURE0)
     glBindTexture(GL_TEXTURE_2D, textureName)
     glGenerateMipmap(GL_TEXTURE_2D)
 
-    // Draw the texture to the screen.
+    // Draw the texture we just rendered to the screen.
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
     check(glGetError() == GL_NO_ERROR)
     glViewport(screenViewport[0], screenViewport[1], screenViewport[2], screenViewport[3])
@@ -150,7 +178,9 @@ class Renderer : GLSurfaceView.Renderer {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 
-    // Draw to the bottom half of the screen with mipmaps enabled.
+    // Draw to the bottom half of the screen with mipmaps enabled. On
+    // the emulator, this draws black and it appears that the texture
+    // is not complete.
     glUniformMatrix4fv(
       glGetUniformLocation(shaderProgram, "transform"),
       1, false,
