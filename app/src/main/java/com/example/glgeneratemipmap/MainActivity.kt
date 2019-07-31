@@ -2,10 +2,10 @@ package com.example.glgeneratemipmap
 
 import android.opengl.GLES20.*
 import android.opengl.GLSurfaceView
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.renderscript.Matrix4f
 import android.util.Log
+import androidx.appcompat.app.AppCompatActivity
 import kotlinx.android.synthetic.main.activity_main.*
 import java.nio.ByteBuffer
 import javax.microedition.khronos.egl.EGLConfig
@@ -49,7 +49,7 @@ class Renderer : GLSurfaceView.Renderer {
         .position(0)
     }
     glBufferData(GL_ARRAY_BUFFER, buffer.capacity(), buffer, GL_STATIC_DRAW)
-    check(glGetError() == GL_NO_ERROR)
+    checkGL()
 
     // Create a simple texturing shader.
     val vertexShader = glCreateShader(GL_VERTEX_SHADER)
@@ -62,7 +62,6 @@ class Renderer : GLSurfaceView.Renderer {
         gl_Position = transform * vertex;
       }""")
     glCompileShader(vertexShader)
-    Log.d("", "vertex shader: ${glGetShaderInfoLog(vertexShader)}")
 
     val fragmentShader = glCreateShader(GL_FRAGMENT_SHADER)
     glShaderSource(fragmentShader, """
@@ -74,7 +73,6 @@ class Renderer : GLSurfaceView.Renderer {
       }
     """)
     glCompileShader(fragmentShader)
-    Log.d("", "fragment shader: ${glGetShaderInfoLog(fragmentShader)}")
 
     shaderProgram = glCreateProgram()
     glAttachShader(shaderProgram, vertexShader)
@@ -90,18 +88,24 @@ class Renderer : GLSurfaceView.Renderer {
       uniform samplerExternalOES colorTexture;
       varying vec2 coord;
       void main() {
-        gl_FragColor = texture2D(colorTexture, coord, 6.);
+        gl_FragColor = texture2D(colorTexture, coord);
       }
     """)
     glCompileShader(oesShader)
-    Log.d("", "oes shader: ${glGetShaderInfoLog(oesShader)}")
 
     oesProgram = glCreateProgram()
     glAttachShader(oesProgram, vertexShader)
     glAttachShader(oesProgram, oesShader)
     glBindAttribLocation(oesProgram, 0, "vertex")
     glLinkProgram(oesProgram)
-    
+
+    glValidateProgram(oesProgram)
+    val status = intArrayOf(GL_FALSE)
+    glGetProgramiv(oesProgram, GL_VALIDATE_STATUS, status, 0)
+    if (status[0] != GL_TRUE) {
+        Log.d("MainActivity", "validation: ${glGetProgramInfoLog(oesProgram)}")
+    }
+
     // Create the texture.
     glGenTextures(1, name, 0)
     textureName = name[0]
@@ -120,7 +124,7 @@ class Renderer : GLSurfaceView.Renderer {
     framebufferName = name[0]
     glBindFramebuffer(GL_FRAMEBUFFER, framebufferName)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureName, 0)
-    check(glGetError() == GL_NO_ERROR)
+    checkGL()
   }
 
   override fun onSurfaceChanged(p0: GL10?, width: Int, height: Int) {
@@ -144,6 +148,7 @@ class Renderer : GLSurfaceView.Renderer {
     glClearColor(0f, 0f, 1f, 1f)
     glClear(GL_COLOR_BUFFER_BIT)
     glDisable(GL_SCISSOR_TEST)
+    checkGL()
 
     // This is where the bug happens! We bind this shader program, and even though
     // it is immediately unbound and never used for drawing, subsequently generating
@@ -151,15 +156,17 @@ class Renderer : GLSurfaceView.Renderer {
     // samplerExternalOES the bug does not appear.
     glUseProgram(oesProgram)
     glUseProgram(0)
+    checkGL()
 
     // Generate the mipmap.
     glActiveTexture(GL_TEXTURE0)
     glBindTexture(GL_TEXTURE_2D, textureName)
+    checkGL()
     glGenerateMipmap(GL_TEXTURE_2D)
+    checkGL()
 
     // Draw the texture we just rendered to the screen.
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
-    check(glGetError() == GL_NO_ERROR)
     glViewport(screenViewport[0], screenViewport[1], screenViewport[2], screenViewport[3])
     glUseProgram(shaderProgram)
 
@@ -191,11 +198,28 @@ class Renderer : GLSurfaceView.Renderer {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 
-    check(glGetError() == GL_NO_ERROR)
+    checkGL()
   }
 
   companion object {
-    private const val TEXTURE_WIDTH = 1280
-    private const val TEXTURE_HEIGHT = 720
+    private const val TEXTURE_WIDTH = 256
+    private const val TEXTURE_HEIGHT = 256
   }
+}
+
+fun convertGLErrorToString(error: Int): String {
+    return when (error) {
+        GL_NO_ERROR -> "GL_NO_ERROR"
+        GL_INVALID_ENUM -> "GL_INVALID_ENUM"
+        GL_INVALID_FRAMEBUFFER_OPERATION -> "GL_INVALID_FRAMEBUFFER_OPERATION"
+        GL_INVALID_VALUE -> "GL_INVALID_VALUE"
+        GL_INVALID_OPERATION -> "GL_INVALID_OPERATION"
+        GL_OUT_OF_MEMORY -> "GL_OUT_OF_MEMORY"
+        else -> "Unknown GL error $error"
+    }
+}
+
+fun checkGL() {
+    val error = glGetError()
+    check(error == GL_NO_ERROR) { convertGLErrorToString(error) }
 }
